@@ -1,4 +1,4 @@
-\# German AI Email Reply Automation using n8n
+# German AI Email Reply Automation using n8n
 
 
 
@@ -10,7 +10,7 @@ This workflow reads incoming German client emails, understands the query, genera
 
 
 
-\## Project Overview
+## Project Overview
 
 
 
@@ -26,7 +26,7 @@ The main goal is to save time, reduce manual email handling, and maintain profes
 
 
 
-\## Key Features
+## Key Features
 
 
 
