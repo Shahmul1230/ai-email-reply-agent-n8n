@@ -88,9 +88,9 @@ Loom Demo: https://www.loom.com/share/e094c5f92adf4a5eaf10d4141c557dcb
 
 ## Screenshots
 
-![Email Workflow](assets/tretr-email-handler.png)
+![Email Workflow](<assets/TRETR Email Handler .png>)
 
-![AI Generated Reply](assets/ai-generated-response-email-order-details.png)
+![AI Generated Reply](<assets/AI generated response email_order details.png>)
 
 ## Folder Structure
 
