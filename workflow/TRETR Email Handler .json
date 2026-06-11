@@ -1,0 +1,863 @@
+{
+  "name": "TRETR Email Handler",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {
+          "forceReconnect": 5
+        }
+      },
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2.1,
+      "position": [
+        -2944,
+        480
+      ],
+      "id": "IMAP_ID",
+      "name": "Email Trigger (IMAP)"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "id",
+              "name": "sender_email",
+              "value": "={{ $json.from }}",
+              "type": "string"
+            },
+            {
+              "id": "id",
+              "name": "subject",
+              "value": "={{ $json.subject }}",
+              "type": "string"
+            },
+            {
+              "id": "id",
+              "name": "body",
+              "value": "={{ $json.textPlain || $json.textHtml }}",
+              "type": "string"
+            },
+            {
+              "id": "id",
+              "name": "date_received",
+              "value": "={{ $json.date }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -2720,
+        480
+      ],
+      "id": "id",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "GPT-4O"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a classifier for TRETR.de, a German online \nshop for personalized football products.\n\nClassify the customer EMAIL into ONE intent:\n\n- ORDER_TRACKING: asking about order, shipping, \n  tracking, delivery, package location,\n  message contains order number or email reference\n\n- FAQ: asking about shipping times, personalization, \n  sizes, heat tags, boot tags, product quality, \n  how to apply, payment methods,\n  general return curiosity like \"kann ich zurueckgeben?\"\n\n- COMPLEX: complaints about damaged goods, \n  angry customers, unclear messages,\n  refund demands, order change requests\n\n- LOST_SHIPMENT: customer says package has not arrived \n  after many days, tracking shows no movement,\n  shipment seems lost or stuck\n\nAlso extract:\n- order_number: any order number found in email\n- customer_email: the sender email address\n\n\nReply ONLY in this JSON format:\n{\n  \"intent\": \"ORDER_TRACKING or FAQ or COMPLEX or LOST_SHIPMENT\",\n  \"order_number\": \"extracted number or null\",\n  \"confidence\": \"high or low\"\n}"
+            },
+            {
+              "content": "=Subject: {{ $node[\"Edit Fields\"].json[\"subject\"] }}\nBody: {{ $node[\"Edit Fields\"].json[\"body\"] }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        -2496,
+        480
+      ],
+      "id": "61655862-a7f6-4ce2-ae5c-353cb96a3011",
+      "name": "Message a model",
+      "credentials": {
+        "openAiApi": {
+          "id": "your_OpenAI_API_KEY",
+          "name": "OpenAI- TRETR"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.output[0].content[0].text;\nconst cleaned = raw.replace(/```json|```/g, '').trim();\n\nlet parsed;\ntry {\n  parsed = JSON.parse(cleaned);\n} catch(e) {\n  parsed = { intent: 'COMPLEX', order_number: null, confidence: 'low' };\n}\n\n// ─── Strip quoted/forwarded text from reply emails ───────────────────────\nfunction stripQuotedText(text) {\n  if (!text) return '';\n  const separators = [\n    /^>+\\s.*/m,                           // Lines starting with >\n    /^On .+wrote:/m,                       // Gmail: \"On Mon, ... wrote:\"\n    /^Am .+schrieb .+:/m,                  // German: \"Am Mo., ... schrieb:\"\n    /^-{3,}\\s*Original Message\\s*-{3,}/im, // \"--- Original Message ---\"\n    /^-{3,}\\s*Weitergeleitete Nachricht/im, // German forwarded header\n    /^Von:\\s+/m,                           // \"Von:\" quoted header\n    /^From:\\s+/m,                          // \"From:\" quoted header\n  ];\n  let clean = text;\n  for (const sep of separators) {\n    const idx = clean.search(sep);\n    if (idx > 0) { clean = clean.substring(0, idx).trim(); break; }\n  }\n  return clean;\n}\n\nconst fullBody = $('Edit Fields').first().json.body || '';\nconst cleanBody = stripQuotedText(fullBody); // Only parse the FRESH part of the email\n\n// Extract order number from clean body only (not quoted thread)\nconst bodyOrderMatch = \n  cleanBody.match(/BESTELLNUMMER[:\\s]+(\\d+)/i) ||\n  cleanBody.match(/Bestellung(?:snummer)?[:\\s#]+(\\d+)/i) ||\n  cleanBody.match(/^(\\d{4,6})\\s*$/m);\n\nconst orderNumber = parsed.order_number || (bodyOrderMatch ? bodyOrderMatch[1] : null);\n\n// Force ORDER_TRACKING if a BESTELLNUMMER pattern found in fresh body\nconst intent = (bodyOrderMatch && !parsed.order_number)\n  ? 'ORDER_TRACKING'\n  : (parsed.intent || 'COMPLEX');\n\n// Clean sender email\nconst senderRaw = $('Edit Fields').first().json.sender_email || '';\nconst senderClean = senderRaw.replace(/^=+/, '').trim();\nconst senderMatch = senderClean.match(/<([^>]+)>/);\nconst senderEmail = senderMatch ? senderMatch[1].trim() : senderClean;\n\nreturn [{\n  json: {\n    intent,\n    order_number: orderNumber,\n    confidence: parsed.confidence || 'low',\n    sender_email: senderEmail,\n    subject: $('Edit Fields').first().json.subject,\n    body: fullBody,\n    clean_body: cleanBody,\n    date_received: $('Edit Fields').first().json.date_received\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2144,
+        480
+      ],
+      "id": "ba84c4d8-fe10-4905-91f3-c46cb1d5a825",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "ORDER_TRACKING",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "2d4f83cf-f737-4029-8c89-947c11144784"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "0bdd3b91-dc3a-4860-b957-7c3d2c874cdb",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "FAQ",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "000bde3c-9aee-44ff-9e4a-e24c0bd2154e",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "LOST_SHIPMENT",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -1920,
+        448
+      ],
+      "id": "5cc04171-a2cc-455b-bf89-2bba44295bf2",
+      "name": "Switch"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "0c377efe-1fdb-41e6-9e11-9b79e312cf8b",
+              "leftValue": "={{ $json.order_number }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -1632,
+        112
+      ],
+      "id": "d355a384-4ee9-439b-a313-59b6d09f8cda",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "url": "=https://tunemytretr.de/wp-json/wc/v3/orders/{{ $json.order_number }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -672,
+        48
+      ],
+      "id": "9b65ed60-b42c-4c36-9ecc-046fafa70e17",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "FZWnwPvAeJ1T5AHZ",
+          "name": "WooCommerce - TRETR"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const order = $input.first().json;\n\nif (!order || !order.id) {\n  return [{\n    json: {\n      found: false,\n      sender_email: $('Edit Fields').first().json.sender_email,\n      subject: $('Edit Fields').first().json.subject\n    }\n  }];\n}\n\nconst shipment = order.shipments?.[0] || null;\n\nconst statusMap = {\n  'pending':    'Deine Zahlung steht noch aus.',\n  'processing': 'Deine Bestellung wird gerade bearbeitet.',\n  'on-hold':    'Deine Bestellung wartet auf Bestaetigung.',\n  'completed':  'Deine Bestellung wurde versandt.',\n  'cancelled':  'Deine Bestellung wurde leider storniert.',\n  'refunded':   'Deine Bestellung wurde erstattet.',\n  'failed':     'Die Zahlung ist leider fehlgeschlagen.'\n};\n\nreturn [{\n  json: {\n    found:           true,\n    order_id:        order.id,\n    order_number:    order.number || order.id,\n    customer_name:   order.billing?.first_name || 'Kunde',\n    status_german:   statusMap[order.status] || 'Status unbekannt.',\n    shipping_method: order.shipping_lines?.[0]?.method_title || null,\n    items:           order.line_items?.map(i => i.name).join(', ') || null,\n    tracking_id:     shipment?.tracking_id || null,\n    tracking_url:    shipment?.tracking_url || null,\n    carrier:         shipment?.shipping_provider_title || null,\n    sender_email:    $('Edit Fields').first().json.sender_email,\n    subject:         $('Edit Fields').first().json.subject\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        48
+      ],
+      "id": "291f56e8-fd8b-45b5-b705-e6a50276bc00",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "919ae4d0-5d1f-45ac-8327-ac5034493f75",
+              "leftValue": "={{ $json.found }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -224,
+        48
+      ],
+      "id": "cf08e0c5-3989-4d57-8b88-10f4b85b6312",
+      "name": "If1"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "GPT-4O"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "=Du bist ein freundlicher KI-Assistent fuer TRETR.de.\nSchreibe eine kurze E-Mail-Antwort auf Deutsch mit \"du\"-Form.\n\nWICHTIGE FORMATIERUNGSREGELN:\n════════════════════════════════════\n- Antworte NUR mit reinem HTML\n- Beginne IMMER mit: <p>Hey {{ $json.customer_name }},</p>\n- KEIN ```html davor\n- KEIN ``` danach\n- KEINE Erklaerungen ausserhalb des HTML\n- Benutze <p> fuer jeden Absatz\n- Benutze <strong> fuer Bestellnummer und Tracking-Nummer\n- Benutze <a href=\"URL\">Sendungsverfolgung</a> fuer Links\n- Kein <html>, kein <body>, kein <head>\n- Beende IMMER mit:\n<p>Your TRETR. Support<br><span style=\"color:#888;font-size:12px;\">Powered by AI, for faster &amp; better support.</span></p>\n════════════════════════════════════\n\nINHALTSREGELN NACH BESTELLSTATUS:\n════════════════════════════════════\n\nWENN status_raw = \"completed\" ODER tracking_id vorhanden:\n- Erwaehne NIEMALS Bearbeitungszeit oder 3-5 Werktage\n- Schreibe NUR: Bestellung wurde versandt\n- Zeige Tracking-Nummer und Tracking-Link\n- Beispiel: \"Deine Bestellung #[nummer] wurde bereits versandt. \n  Du kannst sie mit der Tracking-Nummer [tracking_id] \n  hier verfolgen: [link]\"\n\nWENN status_raw = \"processing\" UND kein tracking_id:\n- Erwaehne Bearbeitungszeit 3-5 Werktage (Mo-Fr)\n- Nenne geschaetzten Versandzeitraum: {{ $json.estimated_dispatch }}\n- Beispiel: \"Deine Bestellung wird gerade bearbeitet. \n  Die Bearbeitung dauert 3-5 Werktage (Mo-Fr). \n  Geschaetzter Versand: [estimated_dispatch]\"\n\nWENN status_raw = \"pending\" oder \"on-hold\":\n- Schreibe: Zahlung oder Bestaetigung steht noch aus\n- Keine Bearbeitungszeit erwaehnen\n\nWENN status_raw = \"cancelled\":\n- Schreibe: Bestellung wurde storniert\n- Support-Kontakt anbieten\n\nREGEL — RUECKGABE:\nErwaehne NIEMALS Rueckgaben oder Erstattungen\nes sei denn der Kunde fragt EXPLIZIT danach.\n════════════════════════════════════"
+            },
+            {
+              "content": "=Kundenname: {{ $json.customer_name }}\nBestellnummer: #{{ $json.order_number }}\nBestelldatum: {{ $json.order_date }}\nBestellstatus: {{ $json.status_german }}\nArtikel: {{ $json.items }}\nVersand: {{ $json.shipping_method }}\nCarrier: {{ $json.carrier }}\nTracking-Nummer: {{ $json.tracking_id }}\nTracking-URL: {{ $json.tracking_url }}\nWerktage seit Bestellung: {{ $json.working_days_since_order }}\nZu frueh: {{ $json.too_early }}\nHeute aufgegeben: {{ $json.is_same_day }}\nGeschaetzter Versand: {{ $json.estimated_dispatch }}\n\nSchreibe eine hilfreiche E-Mail-Antwort.\n\n"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        224,
+        0
+      ],
+      "id": "831ce54d-2fe9-446e-abd8-492602c67873",
+      "name": "Message a model1",
+      "credentials": {
+        "openAiApi": {
+          "id": "your_OpenAI_API_KEY",
+          "name": "OpenAI- TRETR"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "riyaaan97@gmail.com",
+        "toEmail": "={{ $('Edit Fields').first().json.sender_email }}",
+        "subject": "={{ $node[\"Code in JavaScript1\"].json[\"subject\"] }}",
+        "html": "={{ $json.output[0].content[0].text.replace(/```html|```/g, '').trim() }}\n\n<hr style=\"border:none; border-top:1px solid #eee; margin:24px 0;\">\n<p style=\"font-size:12px; color:#888;\">\n  ⚠️ Do not reply to this email. If you have any more questions, \n  send a new email to \n  <a href=\"mailto:kontakt@tunemytretr.de\">kontakt@tunemytretr.de</a>\n</p>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        576,
+        0
+      ],
+      "id": "id",
+      "name": "Send an Email",
+      "webhookId": "webhookid"
+    },
+    {
+      "parameters": {
+        "fromEmail": "riyaaan97@gmail.com",
+        "toEmail": "={{ $json.sender_email }}",
+        "subject": "={{ $json.subject }}",
+        "html": "<p>Hey,</p>\n\n<p>Um deinen Bestellstatus abzurufen, benötigen wir deine Bestellnummer.</p>\n\n<p>Bitte schreibe uns eine <strong>neue E-Mail</strong> an \n<a href=\"mailto:kontakt@tunemytretr.de\">kontakt@tunemytretr.de</a> \nmit folgendem Inhalt:</p>\n\n<p style=\"background:#f5f5f5; padding:12px; border-left:4px solid #222; font-family:monospace;\">\n  <strong>Betreff:</strong> Bestellstatus<br><br>\n  <strong>Nachricht:</strong><br>\n  BESTELLNUMMER: [deine Nummer]\n</p>\n\n<p>Deine Bestellnummer findest du in deiner Bestellbestätigungs-E-Mail von TRETR.</p>\n\n<hr style=\"border:none; border-top:1px solid #eee; margin:24px 0;\">\n<p style=\"font-size:12px; color:#888;\">\n  ⚠️ Do not reply to this email. If you have any more questions, \n  send a new email to \n  <a href=\"mailto:kontakt@tunemytretr.de\">kontakt@tunemytretr.de</a>\n</p>\n\n<p>Your TRETR. Support<br>\n<span style=\"color:#888; font-size:12px;\">Powered by AI, for faster &amp; better support.</span></p>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        208
+      ],
+      "id": "id",
+      "name": "Send an Email1",
+      "webhookId": "webhookid"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "GPT-4O"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Antworte NUR mit reinem HTML.\nBeginne DIREKT mit dem ersten <p> Tag.\nKEIN ```html davor, KEIN ``` danach.\nBenutze <p> fuer Absaetze.\nKein <html>, kein <body>, kein <head>.\n\nDu bist ein KI-Assistent fuer TRETR.de.\nBeantworte die Frage NUR mit den FAQ-Informationen.\nAntworte auf Deutsch mit \"du\"-Form, direkt und kurz.\nBeginne IMMER mit: <p>Hey,</p>\nBeende mit: <p>Your TRETR. Support<br><span style=\"color:#888;font-size:12px;\">Powered by AI, for faster &amp; better support.</span></p>\n\n=== FAQ ===\n\nBESTELLUNG & VERSAND:\n\nQ: Wo ist meine Bestellung?\nA: Sobald deine Bestellung versendet wurde, bekommst du \neine E-Mail mit deinem Tracking-Link. Falls du noch keine \nVersandbestaetigung hast, befindet sich deine Bestellung \naktuell in Produktion oder Bearbeitung.\n\nQ: Wie lange dauert der Versand?\nA: Die Lieferzeit betraegt in der Regel 2-4 Werktage nach \nVersand. Personalisierte Produkte werden vor dem Versand \nindividuell gefertigt, wodurch sich die Gesamtzeit leicht \nverlaengern kann.\n\nQ: Was bringt Premium Versand?\nA: Premium Versand sorgt fuer eine schnellere Zustellung \ndurch den Versanddienstleister. Die Produktion deiner \nBestellung wird dadurch nicht beschleunigt.\n\nQ: Meine Sendung zeigt \"offen\" - was bedeutet das?\nA: Die Sendung wurde bereits angekuendigt, aber noch nicht \nim System von DHL oder Deutsche Post gescannt. Das ist \nnormal und kann 1-2 Werktage dauern, insbesondere an \nWochenenden oder Feiertagen. Sollte sich nach 3-4 Tagen \nnichts aendern, melde dich bitte bei uns.\n\nQ: Wird meine Bestellung mit DHL oder Deutsche Post versendet?\nA: Je nach Produkt und Groesse wird deine Bestellung entweder \nmit DHL (inkl. Tracking) oder mit Deutsche Post versendet. \nDie Auswahl erfolgt automatisch.\n\nQ: Was passiert, wenn meine Bestellung verloren geht?\nA: Sollte deine Bestellung auf dem Versandweg verloren gehen, \nkuemmern wir uns darum. Melde dich einfach bei uns und \nwir pruefen den Fall.\n\nPERSONALISIERUNG & PRODUKTE:\n\nQ: Kann ich eigene Designs erstellen?\nA: Ja, du kannst eigene Designs ganz einfach ueber den \nKonfigurator erstellen oder das Produkt \n\"Eigenes Bild hochladen\" nutzen.\n\nQ: Wie erstelle ich meine eigenen Schienbeinschoner?\nA: Waehle ein Design oder lade dein eigenes Bild hoch, \npasse es an und schliesse deine Bestellung ab. \nWir uebernehmen die Produktion fuer dich.\n\nQ: Wie gut haelt der Druck auf den Schienbeinschonern?\nA: Der Druck ist fuer den sportlichen Einsatz entwickelt \nund haelt auch bei intensiver Nutzung zuverlaessig.\n\nQ: Sind die Produkte fuer Spiele geeignet?\nA: Ja, alle Produkte sind fuer Training und Spiel ausgelegt.\n\nGROESSEN & AUSWAHL:\n\nQ: Welche Schienbeinschoner Groesse brauche ich?\nA: Die richtige Groesse haengt von deiner Koerpergroesse und \ndeinem Spielstil ab. Viele Spieler entscheiden sich bewusst \nfuer kleinere Modelle, um mehr Bewegungsfreiheit zu haben.\n\nQ: Mein Kind ist X Jahre alt - welche Groesse passt?\nA: Als grobe Orientierung:\n6-10 Jahre: kleine Groessen\n10-14 Jahre: mittlere Groessen\nAb 14 Jahren: je nach Vorliebe mittel bis gross\nIm Zweifel wird oft eine etwas kleinere Variante gewaehlt.\n\nQ: Kann ich auch kleinere Schienbeinschoner tragen?\nA: Ja, viele Spieler bevorzugen kleinere Schienbeinschoner. \nDiese bieten mehr Bewegungsfreiheit, jedoch etwas \nweniger Schutz.\n\nHEAT TAGS & BOOT TAGS:\n\nQ: Was ist der Unterschied zwischen Heat Tags und Boot Tags?\nA: Heat Tags sind Buegelaufkleber, die auf den Schuh \naufgebracht werden. Sie bieten eine sehr hohe Haltbarkeit \nund eignen sich auch fuer strukturierte Oberflaechen.\nBoot Tags sind Klebeaufkleber, die ohne Buegeleisen \nangebracht werden koennen. Sie sind einfacher in der \nAnwendung und ideal fuer glatte Oberflaechen.\n\nQ: Welche Variante haelt besser?\nA: Heat Tags bieten die staerkste Haltbarkeit.\n\nANWENDUNG & HALTBARKEIT:\n\nQ: Wie lange halten die Aufkleber?\nA: Bei richtiger Anwendung halten die Aufkleber sehr lange, \nauch bei regelmaessiger Nutzung im Training und Spiel.\n\nQ: Wie bringe ich die Aufkleber richtig an?\nA: Die Aufkleber werden je nach Produkt entweder \naufgebuegelt oder aufgeklebt. Eine genaue Anleitung \nbekommst du mit deiner Bestellung.\n\nQ: Kann ich die Aufkleber wieder entfernen?\nA: Die Aufkleber sind fuer dauerhaften Halt gemacht. \nEntfernen ist moeglich, jedoch mit Aufwand verbunden \nund nicht immer rueckstandslos.\n\nQ: Auf welchen Schuhen halten die Aufkleber am besten?\nA: Am besten halten sie auf glatten Oberflaechen. Auf \nleicht strukturierten Materialien funktionieren sie \nebenfalls gut.\n\nRUECKGABE & AENDERUNGEN:\n\nQ: Kann ich meine Bestellung zurueckgeben?\nA: Personalisierte Produkte sind vom Umtausch \nausgeschlossen. Standardprodukte koennen im Rahmen \nder gesetzlichen 14-Tage-Frist zurueckgegeben werden.\nDie Ruecksendekosten traegst du als Kunde.\nSchick das Produkt einfach an unsere Adresse und \nmelde dich vorher kurz unter support@tunemytretr.de.\n\nQ: Kann ich meine Bestellung nachtraeglich aendern?\nA: Solange sich deine Bestellung noch nicht in Produktion \nbefindet, koennen Aenderungen oft noch vorgenommen werden. \nMelde dich dafuer so schnell wie moeglich bei uns.\n\nSUPPORT:\n\nQ: Ich habe ein Problem mit meiner Bestellung - \nwas soll ich tun?\nA: Melde dich einfach per E-Mail unter \nsupport@tunemytretr.de und wir kuemmern uns \nschnellstmoeglich darum.\n\n=== END FAQ ==="
+            },
+            {
+              "content": "={{ $node[\"Edit Fields\"].json[\"body\"] }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        -1696,
+        384
+      ],
+      "id": "id",
+      "name": "Message a model2",
+      "credentials": {
+        "openAiApi": {
+          "id": "your_OpenAI_API_KEY",
+          "name": "OpenAI- TRETR"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "email_id",
+        "toEmail": "={{ $node[\"Edit Fields\"].json[\"sender_email\"] }}",
+        "subject": "={{ $node[\"Edit Fields\"].json[\"subject\"] }}",
+        "html": "={{ $json.output[0].content[0].text.replace(/```html|```/g, '').trim() }}\n\n<hr style=\"border:none; border-top:1px solid #eee; margin:24px 0;\">\n<p style=\"font-size:12px; color:#888;\">\n  ⚠️ Do not reply to this email. If you have any more questions, \n  send a new email to \n  <a href=\"mailto:kontakt@tunemytretr.de\">kontakt@tunemytretr.de</a>\n</p>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -1344,
+        384
+      ],
+      "id": "id",
+      "name": "Send an Email2",
+      "webhookId": "webhookid"
+    },
+    {
+      "parameters": {
+        "fromEmail": "sender_email",
+        "toEmail": "receiver_email",
+        "subject": "=[Weiterleitung] {{ $node[\"Edit Fields\"].json[\"subject\"] }}",
+        "html": "=<p>Hallo Tim,</p>\n<p>Eine Kunden-E-Mail konnte nicht automatisch beantwortet werden:</p>\n<table style=\"border-collapse:collapse;width:100%;max-width:500px;\">\n  <tr><td style=\"padding:6px;font-weight:bold;\">Von:</td><td style=\"padding:6px;\">{{ $node[\"Edit Fields\"].json[\"sender_email\"] }}</td></tr>\n  <tr style=\"background:#f5f5f5;\"><td style=\"padding:6px;font-weight:bold;\">Betreff:</td><td style=\"padding:6px;\">{{ $node[\"Edit Fields\"].json[\"subject\"] }}</td></tr>\n  <tr><td style=\"padding:6px;font-weight:bold;\">Erhalten:</td><td style=\"padding:6px;\">{{ $node[\"Edit Fields\"].json[\"date_received\"] }}</td></tr>\n  <tr style=\"background:#f5f5f5;\"><td style=\"padding:6px;font-weight:bold;\">Inhalt:</td><td style=\"padding:6px;\">{{ $node[\"Edit Fields\"].json[\"body\"] }}</td></tr>\n</table>\n<p>Bitte direkt beim Kunden melden.</p>\n<p style=\"color:#999;font-size:12px;\">TRETR Support Bot</p>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -1632,
+        768
+      ],
+      "id": "id",
+      "name": "Send an Email3",
+      "webhookId": "webhookid"
+    },
+    {
+      "parameters": {
+        "fromEmail": "sender_email",
+        "toEmail": "={{ $node[\"Edit Fields\"].json[\"sender_email\"] }}",
+        "subject": "={{ $node[\"Edit Fields\"].json[\"subject\"] }}",
+        "html": "<p>Hey,</p>\n<p>Danke für deine Nachricht! Wir haben deine Anfrage erhalten und das Support-Team meldet sich <strong>so schnell wie möglich</strong> per E-Mail bei dir.</p>\n<p>Your TRETR. Support<br><span style=\"color:#888;font-size:12px;\">Powered by AI, for faster &amp; better support.</span></p>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -1344,
+        768
+      ],
+      "id": "id",
+      "name": "Send an Email4",
+      "webhookId": "webhookId"
+    },
+    {
+      "parameters": {
+        "jsCode": "const order = $input.first().json;\n\n// WooCommerce date_created fix\nlet orderDate;\ntry {\n  const raw = order.date_created || order.date_created_gmt;\n  // WooCommerce format: \"2026-05-06T10:30:00\"\n  orderDate = new Date(raw.replace(' ', 'T'));\n  if (isNaN(orderDate.getTime())) throw new Error('Invalid');\n} catch(e) {\n  // fallback to current date if parsing fails\n  orderDate = new Date();\n}\n\nconst now = new Date();\n\nfunction countWorkingDays(startDate, endDate) {\n  let count = 0;\n  const current = new Date(startDate);\n  current.setHours(0, 0, 0, 0);\n  const end = new Date(endDate);\n  end.setHours(0, 0, 0, 0);\n  while (current < end) {\n    const day = current.getDay();\n    if (day !== 0 && day !== 6) count++;\n    current.setDate(current.getDate() + 1);\n  }\n  return count;\n}\n\nfunction addWorkingDays(startDate, days) {\n  const date = new Date(startDate);\n  let added = 0;\n  while (added < days) {\n    date.setDate(date.getDate() + 1);\n    const day = date.getDay();\n    if (day !== 0 && day !== 6) added++;\n  }\n  return date;\n}\n\nconst formatDate = (date) => date.toLocaleDateString('de-DE', {\n  weekday: 'long',\n  day: '2-digit',\n  month: '2-digit',\n  year: 'numeric'\n});\n\nconst workingDaysSinceOrder = countWorkingDays(orderDate, now);\nconst estimatedEarly = addWorkingDays(orderDate, 3);\nconst estimatedLate = addWorkingDays(orderDate, 5);\nconst isSameDay = workingDaysSinceOrder === 0;\nconst tooEarly = workingDaysSinceOrder < 3;\n\nreturn [{\n  json: {\n    ...order,\n    working_days_since_order: workingDaysSinceOrder,\n    too_early: tooEarly,\n    is_same_day: isSameDay,\n    order_date: formatDate(orderDate),\n    estimated_dispatch: formatDate(estimatedEarly) + ' bis ' + formatDate(estimatedLate)\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "id",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "fromEmail": "sender_email",
+        "toEmail": "receiver_email",
+        "subject": "=[Verlorene Sendung] {{ $json.subject }}",
+        "html": "=<p>Hallo Tim,</p>\n\n<p>Ein Kunde meldet eine möglicherweise verlorene Sendung.</p>\n\n<table style=\"border-collapse:collapse; width:100%; max-width:500px;\">\n  <tr>\n    <td style=\"padding:6px; font-weight:bold;\">Von:</td>\n    <td style=\"padding:6px;\">{{ $json.sender_email }}</td>\n  </tr>\n  <tr style=\"background:#f5f5f5;\">\n    <td style=\"padding:6px; font-weight:bold;\">Betreff:</td>\n    <td style=\"padding:6px;\">{{ $json.subject }}</td>\n  </tr>\n  <tr>\n    <td style=\"padding:6px; font-weight:bold;\">Nachricht:</td>\n    <td style=\"padding:6px;\">{{ $json.body }}</td>\n  </tr>\n</table>\n\n<p>Bitte prüfen und direkt beim Kunden melden.</p>\n\n<p style=\"color:#999; font-size:12px;\">TRETR Support Bot</p>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -1632,
+        576
+      ],
+      "id": "id",
+      "name": "Send an Email5",
+      "webhookId": "webhookid"
+    },
+    {
+      "parameters": {
+        "fromEmail": "Sender_Email_Address",
+        "toEmail": "={{ $('Edit Fields').first().json.sender_email }}",
+        "subject": "=Re: {{ $('Edit Fields').first().json.subject }}",
+        "html": "<p>Hey,</p>\n\n<p>Danke für deine Nachricht. Wir haben deine Meldung zur möglichen \nSendungsverzögerung erhalten und prüfen das <strong>sofort</strong> für dich.</p>\n\n<p>Du hörst <strong>innerhalb von 24 Stunden</strong> von uns.</p>\n\n<hr style=\"border:none; border-top:1px solid #eee; margin:24px 0;\">\n<p style=\"font-size:12px; color:#888;\">\n  ⚠️ Do not reply to this email. If you have any more questions, \n  send a new email to \n  <a href=\"mailto:kontakt@tunemytretr.de\">kontakt@tunemytretr.de</a>\n</p>\n\n<p>Your TRETR. Support<br>\n<span style=\"color:#888; font-size:12px;\">Powered by AI, for faster &amp; better support.</span></p>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -1344,
+        576
+      ],
+      "id": "id",
+      "name": "Send an Email6",
+      "webhookId": "webhookid"
+    },
+    {
+      "parameters": {
+        "url": "https://tunemytretr.de/wp-json/wc/v3/orders",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "email",
+              "value": "={{ $json.sender_email }}"
+            },
+            {
+              "name": "per_page",
+              "value": "10"
+            },
+            {
+              "name": "orderby",
+              "value": "date"
+            },
+            {
+              "name": "order",
+              "value": "desc"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -1344,
+        192
+      ],
+      "id": "id",
+      "name": "HTTP Request1",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "WooCommerce_store_id",
+          "name": "WooCommerce - TRETR"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst orders = Array.isArray(data) ? data : [data];\n\nconst senderEmail = $('Edit Fields').first().json.sender_email;\nconst cleanSender = (senderEmail || '').toLowerCase().trim().replace(/[<>]/g, '');\n\n// Filter orders that match the email\nconst matchingOrders = orders.filter(o => \n  (o?.billing?.email || '').toLowerCase().trim() === cleanSender\n);\n\nif (!matchingOrders || matchingOrders.length === 0) {\n  return [{\n    json: {\n      found: false,\n      sender_email: senderEmail,\n      subject: $('Edit Fields').first().json.subject\n    }\n  }];\n}\n\n// Use most recent order by default\nconst order = matchingOrders[0];\n\nreturn [{\n  json: {\n    found: true,\n    order_id: order.id,\n    total_orders: matchingOrders.length,\n    sender_email: senderEmail,\n    subject: $('Edit Fields').first().json.subject\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1120,
+        192
+      ],
+      "id": "id",
+      "name": "Code in JavaScript3"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "id",
+              "leftValue": "={{ $json.found }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -896,
+        192
+      ],
+      "id": "id",
+      "name": "If2"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Email Trigger (IMAP)": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Message a model2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send an Email5",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send an Email3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "If1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send an Email1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model1": {
+      "main": [
+        [
+          {
+            "node": "Send an Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model2": {
+      "main": [
+        [
+          {
+            "node": "Send an Email2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an Email3": {
+      "main": [
+        [
+          {
+            "node": "Send an Email4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Message a model1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an Email5": {
+      "main": [
+        [
+          {
+            "node": "Send an Email6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript3": {
+      "main": [
+        [
+          {
+            "node": "If2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If2": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send an Email1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "id",
+  "meta": {
+    "instanceId": "id"
+  },
+  "id": "id",
+  "tags": []
+}
